@@ -73,5 +73,13 @@ class BackendClient:
             resp.raise_for_status()
             return await resp.json()
 
+    async def get_search_candidate(self, telegram_id: int) -> Optional[dict]:
+        session = await self._get_session()
+        async with session.get(f"{self.base_url}/api/users/{telegram_id}/search-candidate") as resp:
+            if resp.status == 404:
+                return None
+            resp.raise_for_status()
+            return await resp.json()
+
 
 backend_client = BackendClient()

@@ -3,13 +3,15 @@ import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+from aiogram.filters import CommandStart
 
-from app.states import RegistrationStates
+from app.states import RegistrationStates, SearchStates
 from app.keyboards import (
     get_start_keyboard,
     get_gender_keyboard,
     get_gender_preference_keyboard,
     get_main_menu_keyboard,
+    get_like_dislike_keyboard,
 )
 from app.http_requests import backend_client
 
@@ -18,7 +20,7 @@ logger = logging.getLogger(__name__)
 router = Router(name="handlers")
 
 
-@router.message(F.text == "/start")
+@router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     telegram_id = message.from_user.id
 
@@ -44,8 +46,23 @@ async def cmd_start(message: Message, state: FSMContext):
         )
 
 
-@router.message(RegistrationStates.waiting_for_start, F.text == "Начать регистрацию")
+@router.message(F.text == "Начать регистрацию")
 async def start_registration(message: Message, state: FSMContext):
+    try:
+        user = await backend_client.get_user(message.from_user.id)
+    except Exception as e:
+        logger.error("Failed to get user %d before registration: %s", message.from_user.id, e)
+        await message.answer("Произошла ошибка. Попробуйте позже.")
+        return
+
+    if user.get("is_registered"):
+        await state.clear()
+        await message.answer(
+            "Анкета уже заполнена. Используй меню ниже.",
+            reply_markup=get_main_menu_keyboard(),
+        )
+        return
+
     await state.set_state(RegistrationStates.waiting_for_age)
     await message.answer("Сколько тебе лет? (введи число)")
 
@@ -219,7 +236,60 @@ async def show_rating(message: Message):
 
 
 @router.message(F.text == "Искать пару")
-async def search_partner(message: Message):
-    await message.answer(
-        "Функция поиска пары будет доступна в следующем обновлении!"
+async def search_partner(message: Message, state: FSMContext):
+    await _send_next_candidate(message, state)
+
+
+@router.callback_query(F.data.startswith("action:"), SearchStates.waiting_for_action)
+async def process_search_action(callback: CallbackQuery, state: FSMContext):
+    action = callback.data.split(":")[1]
+    data = await state.get_data()
+    candidate_id = data.get("current_candidate_id")
+
+    if candidate_id is None:
+        await callback.answer("Анкета не найдена", show_alert=True)
+        await state.clear()
+        return
+
+    is_like = action == "like"
+    try:
+        await backend_client.send_interaction(
+            requester_id=callback.from_user.id,
+            responser_id=candidate_id,
+            is_like=is_like,
+        )
+    except Exception as e:
+        logger.error("Failed to send interaction from %d to %d: %s", callback.from_user.id, candidate_id, e)
+        await callback.answer("Ошибка, попробуй позже", show_alert=True)
+        return
+
+    await callback.answer("Лайк отправлен" if is_like else "Анкета пропущена")
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await _send_next_candidate(callback.message, state)
+
+
+async def _send_next_candidate(message: Message, state: FSMContext):
+    try:
+        candidate = await backend_client.get_search_candidate(message.from_user.id)
+    except Exception as e:
+        logger.error("Failed to search candidate for %d: %s", message.from_user.id, e)
+        await message.answer("Не удалось найти анкету. Попробуй позже.")
+        return
+
+    if not candidate:
+        await state.clear()
+        await message.answer("Подходящих анкет пока нет. Попробуй позже.")
+        return
+
+    await state.set_state(SearchStates.waiting_for_action)
+    await state.update_data(current_candidate_id=candidate["telegram_id"])
+
+    text = (
+        "Найдена анкета:\n\n"
+        f"Возраст: {candidate.get('age', '—')}\n"
+        f"Пол: {candidate.get('gender', '—')}\n"
+        f"Интересы: {candidate.get('interests', '—')}\n"
+        f"Город: {candidate.get('city', '—')}\n"
+        f"Рейтинг: {candidate.get('rating', 0.0):.2f}"
     )
+    await message.answer(text, reply_markup=get_like_dislike_keyboard())

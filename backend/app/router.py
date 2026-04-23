@@ -85,6 +85,19 @@ async def get_rating(telegram_id: int, session: AsyncSession = Depends(get_sessi
     return RatingResponse(telegram_id=telegram_id, rating=rating)
 
 
+@router.get("/users/{telegram_id}/search-candidate", response_model=UserResponse)
+async def get_search_candidate(telegram_id: int, session: AsyncSession = Depends(get_session)):
+    user = await repositories.get_user_by_telegram_id(session, telegram_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    candidate = await repositories.get_next_candidate(session, telegram_id)
+    if not candidate:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No candidates found")
+
+    return _build_user_response(candidate)
+
+
 def _build_user_response(user) -> UserResponse:
     return UserResponse(
         telegram_id=user.telegram_id,
