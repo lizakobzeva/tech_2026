@@ -212,12 +212,16 @@ async def invalid_city_pref(message: Message):
 async def show_profile(message: Message):
     try:
         user = await backend_client.get_user(message.from_user.id)
+        rating_value = user.get("rating")
+        if rating_value is None:
+            rating_value = 0.0
         profile_text = (
             f"Твой профиль\n\n"
             f"Возраст: {user.get('age', '—')}\n"
             f"Пол: {user.get('gender', '—')}\n"
             f"Интересы: {user.get('interests', '—')}\n"
             f"Город: {user.get('city', '—')}\n"
+            f"Рейтинг: {float(rating_value):.2f}\n"
         )
         await message.answer(profile_text)
     except Exception as e:
@@ -229,7 +233,10 @@ async def show_profile(message: Message):
 async def show_rating(message: Message):
     try:
         rating_data = await backend_client.get_rating(message.from_user.id)
-        await message.answer(f"Твой рейтинг: {rating_data['rating']:.2f}")
+        rating_value = rating_data.get("rating")
+        if rating_value is None:
+            rating_value = 0.0
+        await message.answer(f"Твой рейтинг: {float(rating_value):.2f}")
     except Exception as e:
         logger.error("Failed to fetch rating for %d: %s", message.from_user.id, e)
         await message.answer("Не удалось загрузить рейтинг")
@@ -283,6 +290,9 @@ async def _send_next_candidate(message: Message, state: FSMContext):
 
     await state.set_state(SearchStates.waiting_for_action)
     await state.update_data(current_candidate_id=candidate["telegram_id"])
+    candidate_rating = candidate.get("rating")
+    if candidate_rating is None:
+        candidate_rating = 0.0
 
     text = (
         "Найдена анкета:\n\n"
@@ -290,6 +300,6 @@ async def _send_next_candidate(message: Message, state: FSMContext):
         f"Пол: {candidate.get('gender', '—')}\n"
         f"Интересы: {candidate.get('interests', '—')}\n"
         f"Город: {candidate.get('city', '—')}\n"
-        f"Рейтинг: {candidate.get('rating', 0.0):.2f}"
+        f"Рейтинг: {float(candidate_rating):.2f}"
     )
     await message.answer(text, reply_markup=get_like_dislike_keyboard())

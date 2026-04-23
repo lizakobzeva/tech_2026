@@ -1,6 +1,6 @@
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -55,6 +55,7 @@ async def create_interaction(
     )
     session.add(interaction)
     await session.commit()
+    await _recalculate_user_rating(session, responser_telegram_id)
     await session.refresh(interaction)
     return interaction
 
@@ -79,6 +80,43 @@ async def get_user_rating(session: AsyncSession, telegram_id: int) -> float:
     )
     rating = result.scalar_one_or_none()
     return rating if rating is not None else 0.0
+
+
+async def _recalculate_user_rating(session: AsyncSession, telegram_id: int) -> None:
+    likes_result = await session.execute(
+        select(func.count()).where(
+            UserInteraction.responser_telegram_id == telegram_id,
+            UserInteraction.is_like.is_(True),
+        )
+    )
+    dislikes_result = await session.execute(
+        select(func.count()).where(
+            UserInteraction.responser_telegram_id == telegram_id,
+            UserInteraction.is_like.is_(False),
+        )
+    )
+
+    likes = likes_result.scalar_one()
+    dislikes = dislikes_result.scalar_one()
+    total = likes + dislikes
+
+    if total == 0:
+        new_rating = 0.0
+    else:
+        approval = likes / total
+        volume_factor = min(total / 10, 1.0)
+        new_rating = round((approval * 5.0 * volume_factor), 2)
+
+    exists_result = await session.execute(
+        select(UserRating).where(UserRating.telegram_id == telegram_id)
+    )
+    rating_row = exists_result.scalar_one_or_none()
+    if rating_row is None:
+        session.add(UserRating(telegram_id=telegram_id, rating=new_rating))
+    else:
+        rating_row.rating = new_rating
+
+    await session.commit()
 
 
 def _split_interests(value: Optional[str]) -> set[str]:
