@@ -3,7 +3,7 @@ import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandObject, CommandStart
 
 from app.states import RegistrationStates, SearchStates
 from app.keyboards import (
@@ -21,11 +21,19 @@ router = Router(name="handlers")
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext):
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
     telegram_id = message.from_user.id
+    referal_id = None
+    if command.args:
+        try:
+            parsed_id = int(command.args.strip())
+            if parsed_id != telegram_id:
+                referal_id = parsed_id
+        except ValueError:
+            referal_id = None
 
     try:
-        user = await backend_client.register_user(telegram_id)
+        user = await backend_client.register_user(telegram_id, referal_id=referal_id)
     except Exception as e:
         logger.error("Failed to register user %d: %s", telegram_id, e)
         await message.answer("Произошла ошибка. Попробуйте позже.")
@@ -245,6 +253,17 @@ async def show_rating(message: Message):
 @router.message(F.text == "Искать пару")
 async def search_partner(message: Message, state: FSMContext):
     await _send_next_candidate(message, state)
+
+
+@router.message(F.text == "Пригласить друга")
+async def invite_friend(message: Message):
+    me = await message.bot.get_me()
+    invite_link = f"https://t.me/{me.username}?start={message.from_user.id}"
+    await message.answer(
+        "Отправь эту ссылку другу:\n"
+        f"{invite_link}\n\n"
+        "Когда он запустит бота по этой ссылке, это будет учтено в реферальном рейтинге."
+    )
 
 
 @router.callback_query(F.data.startswith("action:"), SearchStates.waiting_for_action)

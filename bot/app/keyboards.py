@@ -49,6 +49,7 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Искать пару")],
             [KeyboardButton(text="Мой профиль"), KeyboardButton(text="Мой рейтинг")],
+            [KeyboardButton(text="Пригласить друга")],
         ],
         resize_keyboard=True,
     )

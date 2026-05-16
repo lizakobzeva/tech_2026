@@ -1,8 +1,8 @@
 from typing import Optional
 
-from sqlalchemy import func, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.models import User, UserInteraction, UserRating
 
@@ -25,7 +25,11 @@ async def create_user(session: AsyncSession, telegram_id: int, referal_id: Optio
     result = await session.execute(
         select(User).options(selectinload(User.rating_entry)).where(User.telegram_id == telegram_id)
     )
-    return result.scalar_one()
+    created_user = result.scalar_one()
+    await _recalculate_user_rating(session, telegram_id)
+    if referal_id is not None:
+        await _recalculate_user_rating(session, referal_id)
+    return created_user
 
 
 async def update_user_fields(session: AsyncSession, telegram_id: int, **kwargs) -> Optional[User]:
@@ -36,6 +40,7 @@ async def update_user_fields(session: AsyncSession, telegram_id: int, **kwargs) 
     user = result.scalar_one_or_none()
     if user is None:
         return None
+    await _recalculate_user_rating(session, telegram_id)
     result = await session.execute(
         select(User).options(selectinload(User.rating_entry)).where(User.telegram_id == telegram_id)
     )
@@ -56,6 +61,7 @@ async def create_interaction(
     session.add(interaction)
     await session.commit()
     await _recalculate_user_rating(session, responser_telegram_id)
+    await _recalculate_user_rating(session, requester_telegram_id)
     await session.refresh(interaction)
     return interaction
 
@@ -83,6 +89,28 @@ async def get_user_rating(session: AsyncSession, telegram_id: int) -> float:
 
 
 async def _recalculate_user_rating(session: AsyncSession, telegram_id: int) -> None:
+    user_result = await session.execute(
+        select(User).where(User.telegram_id == telegram_id)
+    )
+    user = user_result.scalar_one_or_none()
+    if user is None:
+        return
+
+    # Уровень 1: первичный рейтинг на основе заполненности анкеты.
+    primary_fields = [
+        user.age,
+        user.gender,
+        user.interests,
+        user.city,
+        user.age_preferences,
+        user.gender_preferences,
+        user.interests_preferences,
+        user.city_preferences,
+    ]
+    filled_primary_fields = sum(1 for value in primary_fields if value is not None and value != "")
+    primary_score = (filled_primary_fields / len(primary_fields)) * 100.0
+
+    # Уровень 2: поведенческий рейтинг.
     likes_result = await session.execute(
         select(func.count()).where(
             UserInteraction.responser_telegram_id == telegram_id,
@@ -100,21 +128,53 @@ async def _recalculate_user_rating(session: AsyncSession, telegram_id: int) -> N
     dislikes = dislikes_result.scalar_one()
     total = likes + dislikes
 
-    if total == 0:
-        new_rating = 0.0
-    else:
-        approval = likes / total
-        volume_factor = min(total / 10, 1.0)
-        new_rating = round((approval * 5.0 * volume_factor), 2)
+    approval_ratio = (likes / total) if total else 0.0
+
+    outgoing_likes_result = await session.execute(
+        select(func.count()).where(
+            UserInteraction.requester_telegram_id == telegram_id,
+            UserInteraction.is_like.is_(True),
+        )
+    )
+    outgoing_likes = outgoing_likes_result.scalar_one()
+
+    ui_a = aliased(UserInteraction)
+    ui_b = aliased(UserInteraction)
+    mutual_likes_result = await session.execute(
+        select(func.count()).where(
+            ui_a.requester_telegram_id == telegram_id,
+            ui_a.is_like.is_(True),
+            exists(
+                select(ui_b.id).where(
+                    ui_b.requester_telegram_id == ui_a.responser_telegram_id,
+                    ui_b.responser_telegram_id == telegram_id,
+                    ui_b.is_like.is_(True),
+                )
+            ),
+        )
+    )
+    mutual_likes = mutual_likes_result.scalar_one()
+    mutual_ratio = (mutual_likes / outgoing_likes) if outgoing_likes else 0.0
+
+    behavior_score = ((approval_ratio * 0.7) + (mutual_ratio * 0.3)) * 100.0
+
+    # Уровень 3: комбинированный рейтинг + реферальный фактор.
+    referrals_result = await session.execute(
+        select(func.count()).where(User.referal_id == telegram_id)
+    )
+    referral_count = referrals_result.scalar_one()
+    referral_bonus = min(referral_count * 5.0, 20.0)
+
+    combined_rating = (primary_score * 0.4) + (behavior_score * 0.5) + referral_bonus
 
     exists_result = await session.execute(
         select(UserRating).where(UserRating.telegram_id == telegram_id)
     )
     rating_row = exists_result.scalar_one_or_none()
     if rating_row is None:
-        session.add(UserRating(telegram_id=telegram_id, rating=new_rating))
+        session.add(UserRating(telegram_id=telegram_id, rating=round(combined_rating, 2)))
     else:
-        rating_row.rating = new_rating
+        rating_row.rating = round(combined_rating, 2)
 
     await session.commit()
 
