@@ -48,8 +48,21 @@ class InteractionResponse(BaseModel):
     responser_telegram_id: int
     is_like: bool
     is_checked: Optional[bool] = None
+    is_match: bool = False
 
 
 class RatingResponse(BaseModel):
     telegram_id: int
     rating: float
+
+
+class RatingDetailsResponse(BaseModel):
+    telegram_id: int
+    rating: float
+    primary_score: float
+    behavior_score: float
+    referral_bonus: float
+    likes: int
+    skips: int
+    mutual_likes: int
+    referrals: int

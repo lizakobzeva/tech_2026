@@ -10,6 +10,7 @@ from app.schemas import (
     InteractionCreate,
     InteractionResponse,
     RatingResponse,
+    RatingDetailsResponse,
 )
 
 router = APIRouter(prefix="/api", tags=["dating"])
@@ -63,7 +64,7 @@ async def create_interaction(data: InteractionCreate, session: AsyncSession = De
             detail="Interaction already exists",
         )
 
-    interaction = await repositories.create_interaction(
+    interaction, is_match = await repositories.create_interaction(
         session, data.requester_telegram_id, data.responser_telegram_id, data.is_like
     )
     return InteractionResponse(
@@ -72,6 +73,7 @@ async def create_interaction(data: InteractionCreate, session: AsyncSession = De
         responser_telegram_id=interaction.responser_telegram_id,
         is_like=interaction.is_like,
         is_checked=interaction.is_checked,
+        is_match=is_match,
     )
 
 
@@ -83,6 +85,29 @@ async def get_rating(telegram_id: int, session: AsyncSession = Depends(get_sessi
 
     rating = await repositories.get_user_rating(session, telegram_id)
     return RatingResponse(telegram_id=telegram_id, rating=rating)
+
+
+@router.get("/users/{telegram_id}/rating/details", response_model=RatingDetailsResponse)
+async def get_rating_details(telegram_id: int, session: AsyncSession = Depends(get_session)):
+    user = await repositories.get_user_by_telegram_id(session, telegram_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    breakdown = await repositories.get_rating_breakdown(session, telegram_id)
+    if breakdown is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    return RatingDetailsResponse(
+        telegram_id=telegram_id,
+        rating=breakdown.combined_rating,
+        primary_score=breakdown.primary_score,
+        behavior_score=breakdown.behavior_score,
+        referral_bonus=breakdown.referral_bonus,
+        likes=breakdown.likes,
+        skips=breakdown.skips,
+        mutual_likes=breakdown.mutual_likes,
+        referrals=breakdown.referrals,
+    )
 
 
 @router.get("/users/{telegram_id}/search-candidate", response_model=UserResponse)

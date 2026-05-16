@@ -240,11 +240,18 @@ async def show_profile(message: Message):
 @router.message(F.text == "Мой рейтинг")
 async def show_rating(message: Message):
     try:
-        rating_data = await backend_client.get_rating(message.from_user.id)
-        rating_value = rating_data.get("rating")
-        if rating_value is None:
-            rating_value = 0.0
-        await message.answer(f"Твой рейтинг: {float(rating_value):.2f}")
+        details = await backend_client.get_rating_details(message.from_user.id)
+        await message.answer(
+            "Твой рейтинг (разбивка по уровням):\n\n"
+            f"Итоговый: {float(details.get('rating', 0.0)):.2f}\n"
+            f"Уровень 1 (первичный): {float(details.get('primary_score', 0.0)):.2f}\n"
+            f"Уровень 2 (поведенческий): {float(details.get('behavior_score', 0.0)):.2f}\n"
+            f"Уровень 3 (рефералы): +{float(details.get('referral_bonus', 0.0)):.2f}\n\n"
+            f"Лайки: {details.get('likes', 0)}\n"
+            f"Пропуски: {details.get('skips', 0)}\n"
+            f"Взаимные лайки: {details.get('mutual_likes', 0)}\n"
+            f"Приглашённые друзья: {details.get('referrals', 0)}"
+        )
     except Exception as e:
         logger.error("Failed to fetch rating for %d: %s", message.from_user.id, e)
         await message.answer("Не удалось загрузить рейтинг")
@@ -279,7 +286,7 @@ async def process_search_action(callback: CallbackQuery, state: FSMContext):
 
     is_like = action == "like"
     try:
-        await backend_client.send_interaction(
+        interaction = await backend_client.send_interaction(
             requester_id=callback.from_user.id,
             responser_id=candidate_id,
             is_like=is_like,
@@ -288,6 +295,18 @@ async def process_search_action(callback: CallbackQuery, state: FSMContext):
         logger.error("Failed to send interaction from %d to %d: %s", callback.from_user.id, candidate_id, e)
         await callback.answer("Ошибка, попробуй позже", show_alert=True)
         return
+
+    if is_like and interaction.get("is_match"):
+        await callback.message.answer(
+            "Это взаимный лайк! У вас match — можете написать друг другу в Telegram."
+        )
+        try:
+            await callback.message.bot.send_message(
+                candidate_id,
+                "У тебя новый match! Кто-то тоже поставил тебе лайк.",
+            )
+        except Exception as e:
+            logger.warning("Failed to notify match partner %d: %s", candidate_id, e)
 
     await callback.answer("Лайк отправлен" if is_like else "Анкета пропущена")
     await callback.message.edit_reply_markup(reply_markup=None)

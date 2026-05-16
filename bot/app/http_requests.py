@@ -73,6 +73,12 @@ class BackendClient:
             resp.raise_for_status()
             return await resp.json()
 
+    async def get_rating_details(self, telegram_id: int) -> dict:
+        session = await self._get_session()
+        async with session.get(f"{self.base_url}/api/users/{telegram_id}/rating/details") as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
     async def get_search_candidate(self, telegram_id: int) -> Optional[dict]:
         session = await self._get_session()
         async with session.get(f"{self.base_url}/api/users/{telegram_id}/search-candidate") as resp:
